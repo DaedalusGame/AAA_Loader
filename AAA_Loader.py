@@ -11,23 +11,56 @@ print("Starting up %s" % HELLO_MY_NAME_IS)
 
 Mod = namedtuple("Mod", "name path module_path")
 
+#List of all currently active mods, including their name, path and module path
 all_mods = []
+#Lookup for modname -> path so I don't have to do a linear search through all mods when making an asset loader
+mod_path_lookup = {}
+
+class AssetLoader:
+	
+	def __init__(self, path):
+		self.base_path = path
+		
+	def get_asset(self, path):
+		assert(path)
+		assert(isinstance(path, list))
+		assert(isinstance(path[0], str))
+		
+		desired_path = os.path.join(self.base_path, *path)
+		relative_path = os.path.relpath(desired_path, os.path.abspath('rl_data'))
+		
+		return relative_path.split(os.sep)
+		
+#TODO: Would be good to have a late loading functionality that runs with a customized negotiated order
+
+def is_mod_active(modname):
+	return modname in mod_path_lookup
+
+def get_asset_loader(modname):
+	return AssetLoader(mod_path_lookup[modname])
 
 #This is a fix for the inability to import RiftWizard directly without using a stack inspection.
 import inspect 
+stack = inspect.stack()
 
-frm = inspect.stack()[-1]
+frm = stack[-1]
 RiftWizard = inspect.getmodule(frm[0])
+frm = stack[0]
+AAA_Loader = inspect.getmodule(frm[0])
 
-class RiftWizardImporter(MetaPathFinder, Loader):
+class ConstantImporter(MetaPathFinder, Loader):
+	def __init__(self, fullname, module):
+		self.fullname = fullname
+		self.module = module
+
 	def find_spec(cls, fullname, path=None, target=None):
-		if(fullname == "RiftWizard"):
-			spec = spec_from_loader(fullname, cls, origin="RiftWizard")
+		if(fullname == cls.fullname):
+			spec = spec_from_loader(fullname, cls, origin=cls.fullname)
 			return spec
 		return None
 
 	def create_module(cls, spec):
-		return RiftWizard
+		return cls.module
 
 	def exec_module(cls, module=None):
 		pass
@@ -42,7 +75,8 @@ class RiftWizardImporter(MetaPathFinder, Loader):
 		return False
 
 
-sys.meta_path.insert(0, RiftWizardImporter())
+sys.meta_path.insert(0, ConstantImporter("RiftWizard", RiftWizard))
+sys.meta_path.insert(0, ConstantImporter("mods.AAA_Loader.AAA_Loader", AAA_Loader))
 
 def discover_mods(mods_path):
 	for f in os.listdir(mods_path):
@@ -77,6 +111,16 @@ def complain_about_duplicates():
 	for key, group in check_set.items():
 		if len(group) > 1:
 			print("WARNING: Found duplicate module path %s (%d duplicates). Only one will be loaded." % (key, len(group)))
+	#We could also just crash at this point.
+			
+def import_mod(mod):
+	print("Loading %s (%s)" % (mod.name, mod.path))
+	if not mod.name in imported_mods:
+		imported_mods.append(mod.name)
+	if mod.module_path in sys.modules:
+		print("Already loaded, skipping")
+		return
+	module = import_module(mod.module_path)
 
 #Add all mods from the base game mod folder
 print("Checking base game mod folder for mods...")
@@ -94,6 +138,11 @@ if MODS_FLAG in sys.argv:
 	
 complain_about_duplicates()
 
+for mod in all_mods:
+	if not mod.name in mod_path_lookup:
+		mod_path_lookup[mod.name] = mod.path
+
+#Readonly list type for stopping duplicate mod list entries in crashlogs
 class ReadOnlyList(UserList):
 	def append(*args, **kwargs):
 		pass
@@ -103,12 +152,7 @@ from importlib import import_module
 imported_mods = []
 	
 for mod in all_mods:
-	print("Loading %s (%s)" % (mod.name, mod.path))
-	imported_mods.append(mod.name)
-	if mod.module_path in sys.modules:
-		print("Already loaded, skipping")
-		continue
-	import_module(mod.module_path)
+	import_mod(mod)
 	
 RiftWizard.loaded_mods = ReadOnlyList(imported_mods)
 		
